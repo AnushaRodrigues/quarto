@@ -1,0 +1,365 @@
+---
+title: 'School Without Hygiene: A Global Reality'
+subtitle: 'BAA1030: Data Analytics & Story Telling'
+author: Anusha Rodrigues
+date: today
+professor: Dr. Damien Dupre
+student: A00046821
+format:
+  html:
+    embed-resources: true
+    code-fold: true
+    code-tools: false
+    code-block-bg: true
+    code-block-border-left: true
+    code-summary: Show the code
+    toc: true
+    toc-title: On this page
+    toc-depth: 3
+    smooth-scroll: true
+    theme: cosmo
+    highlight-style: github
+    self-contained: true
+execute:
+  echo: false
+  warning: false
+  message: false
+editor: visual
+jupyter: python3
+---
+
+
+```{python}
+# Importing libraries and packages for the visualization
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from plotnine import *
+import os
+import tempfile
+import urllib.request
+import zipfile
+import geopandas as gpd
+```
+
+```{python}
+# LoadING the datasets
+hygiene_data = pd.read_csv('cleaned_unicef_indicator_anusha.csv')
+metadata = pd.read_csv('cleaned_unicef_metadata _anusha.csv')
+```
+
+```{python}
+#| colab: {base_uri: https://localhost:8080/}
+print("School Hygiene Data:")
+print(hygiene_data.head())
+
+print("\nHygiene data Info:")
+print(hygiene_data.info())
+```
+
+```{python}
+#| colab: {base_uri: https://localhost:8080/}
+# Basic data information
+print("\nMetadata:")
+print(metadata.head())
+
+print("\nMetadata Info:")
+print(metadata.info())
+```
+
+```{python}
+#| colab: {base_uri: https://localhost:8080/}
+# Merging the datasets
+hygiene_data = hygiene_data.rename(columns={'time_period': 'year'})
+combined_data = pd.merge(hygiene_data, metadata, on=['country', 'numeric_code', 'year'], how='inner')
+
+print("Combined Data:")
+print(combined_data.head())
+print(combined_data.describe())
+```
+
+```{python}
+#| colab: {base_uri: https://localhost:8080/}
+# Check for missing values
+print("\nMissing values in combined data:")
+print(combined_data.isnull().sum())
+print("\nCombined Data Shape:", combined_data.shape)
+```
+
+```{python}
+#| colab: {base_uri: https://localhost:8080/, height: 256}
+# Cleaning the data - removing rows with missing values
+key_columns = ['Proportion of schools with no hygiene service',
+              'life_expectancy_at_birth,_total_(years)',
+              'gdp_per_capita_(constant_2015_us$)']
+cleaned_data = combined_data.dropna(subset=key_columns)
+cleaned_data.columns = cleaned_data.columns.str.strip().str.lower().str.replace(" ", "_")
+
+print("\nCleaned data shape:", cleaned_data.shape)
+cleaned_data.head(5)
+```
+
+```{python}
+#| colab: {base_uri: https://localhost:8080/, height: 637}
+# Fetching GeoJSON data for country
+!wget -q https://github.com/nvkelso/natural-earth-vector/raw/master/geojson/ne_110m_admin_0_countries.geojson -O data_countries.geojson
+
+
+geo_df = gpd.read_file("data_countries.geojson")
+geo_df = geo_df.rename(columns={'ADMIN': 'country'})
+
+# Merging geo data with personal dataset
+geo_hygiene = geo_df.merge(
+    cleaned_data[['country', 'proportion_of_schools_with_no_hygiene_service']],
+    how='left',
+    on='country'
+)
+geo_hygiene = geo_hygiene.to_crs("+proj=robin")
+
+
+geo_polygons = (
+    geo_hygiene
+    .explode(index_parts=False)
+    .reset_index(drop=True)
+)
+geo_polygons = geo_polygons[
+    geo_polygons.geometry.notnull() & (geo_polygons.geometry.geom_type == 'Polygon')
+]
+
+# Extracting polygon coordinates
+def coords_from_polygon(row):
+    x_vals, y_vals = row.geometry.exterior.coords.xy
+    return pd.DataFrame({
+        'x_proj': x_vals,
+        'y_proj': y_vals,
+        'country': row['country'],
+        'urban_pct': row['proportion_of_schools_with_no_hygiene_service'],
+        'shape_id': row.name
+    })
+
+#Plotting
+plot_points = pd.concat(
+    [coords_from_polygon(r) for _, r in geo_polygons.iterrows()],
+    ignore_index=True
+)
+
+hygiene_choropleth = (
+    ggplot(plot_points, aes(x='x_proj', y='y_proj', group='shape_id', fill='urban_pct')) +
+    geom_polygon(color='#333333', size=0.1) +
+    scale_fill_gradient(
+        low="#d0f0c0", high="#003366",
+        name="Hygiene in School Rate (%)",
+        na_value="#cccccc"
+    ) +
+    coord_equal() +
+    theme_void() +
+    labs(
+        title="Global Distribution of Schools Without Hygiene Services",
+        subtitle="Data gaps shown in grey"
+    ) +
+    theme(
+        figure_size=(12, 6),
+        plot_title=element_text(size=20, weight='bold'),
+        plot_subtitle=element_text(size=13, color='darkgray'),
+        legend_title=element_text(size=12),
+        legend_position='right'
+    )
+)
+
+display(hygiene_choropleth)
+```
+
+# **Global Distribution of Schools without Hygiene Service**
+
+This map highlights an unseen emergency, *millions of children attend schools lacking essential hygiene facilities such as soap and water.* The deeper green regions, particularly in **sections of Africa and South Asi**a, indicate the most severe issues, with more than **80%** of schools missing these essentials.
+
+Conversely, nations in **grey** possess superior facilities, yet this does not imply that the work is complete. Each child is entitled to a secure, clean environment for education. This map serves as a reminder that fundamental hygiene is not a privilege — it's a right!
+
+
+
+Let's utilize this information to initiate transformation, one school at a time!
+
+```{python}
+#| colab: {base_uri: https://localhost:8080/, height: 854}
+import numpy as np
+import pandas as pd
+from plotnine import *
+from plotnine.themes import theme_minimal
+
+
+worst_hygiene = cleaned_data.sort_values('proportion_of_schools_with_no_hygiene_service', ascending=False).head(50)
+
+# Normalizing 'color' column
+worst_hygiene = worst_hygiene.copy()
+worst_hygiene['color'] = np.interp(
+    worst_hygiene['proportion_of_schools_with_no_hygiene_service'],
+    (worst_hygiene['proportion_of_schools_with_no_hygiene_service'].min(),
+     worst_hygiene['proportion_of_schools_with_no_hygiene_service'].max()),
+    (0, 1)
+)
+
+worst_hygiene['label'] = (worst_hygiene['proportion_of_schools_with_no_hygiene_service'].round(1)).astype(str) + '%'
+
+# Bar chart
+bar_chart = (
+    ggplot(worst_hygiene,
+           aes(x='reorder(country, proportion_of_schools_with_no_hygiene_service)',
+               y='proportion_of_schools_with_no_hygiene_service',
+               fill='color')) +
+    geom_bar(stat='identity') +
+    scale_fill_gradient(low='#73C2FB', high='#1E3D59') +
+    coord_flip() +
+    geom_text(
+        aes(label='label'),
+        ha='left',
+        nudge_y=1
+    ) +
+    labs(
+        title='Countries with Highest Proportion of Schools Lacking Hygiene Services',
+        subtitle='Based on most recent available data',
+        x='',
+        y='Percentage of Schools Without Hygiene Services'
+    ) +
+    theme_minimal() +
+    theme(
+        figure_size=(10, 8),
+        plot_title=element_text(weight='bold', size=14),
+        plot_subtitle=element_text(size=11, color='#666666'),
+        axis_text_y=element_text(size=11),
+        axis_text_x=element_text(size=10),
+        panel_grid_major_y=element_blank(),
+        panel_grid_minor=element_blank(),
+        panel_grid_major_x=element_line(color='#EEEEEE'),
+        axis_ticks=element_blank()
+    ) +
+    scale_y_continuous(
+        limits=[0, worst_hygiene['proportion_of_schools_with_no_hygiene_service'].max() * 1.15],
+        breaks=list(range(0, 101, 20)),
+        labels=lambda l: [f'{v}%' for v in l]
+    )
+)
+
+display(bar_chart)
+```
+
+# **Countries with the Highest School Hygiene Deficit**
+
+
+Many children in multiple zones throughout the world experience difficulties with inadequate hygiene facilities in their educational institutions. Research indicates **Yemen** faces extreme difficulties since **85%**  of its educational facilities do not possess appropriate sanitation facilities. The **Solomon Islands** follow Yemen in terms of school challenges due to inadequate hygiene facilities because **82%** of educational institutions fail to meet these basic needs.
+
+The educational institutions of **Togo and South Sudan** together with **Malawi** experience a severe shortfall of basic amenities including handwashing facilities in more than three-quarters of their facilities. Although ranked lower on the list Niger and Tajikistan exhibit critical differences that affect the health and educational performance of their students.
+
+Figures in these data points reflect actual obstacles that block access to education and health as well as dignity for the population. Getting rid of these pressing shortages needs more than just building structures since schools ought to provide safe learning environments with proper healthcare facilities to create opportunities for safe education and better futures for every child.
+
+```{python}
+#| colab: {base_uri: https://localhost:8080/, height: 837}
+from plotnine import *
+import numpy as np
+
+# Scatterplot with regression line
+scatter_plot = (
+    ggplot(cleaned_data,
+           aes(x='proportion_of_schools_with_no_hygiene_service',
+               y='life_expectancy_at_birth,_total_(years)')) +
+
+    geom_hline(yintercept=np.arange(40, 90, 10), color='#EEEEEE', size=0.5) +
+    geom_vline(xintercept=np.arange(0, 100, 20), color='#EEEEEE', size=0.5) +
+
+    geom_point(color='#006400', alpha=0.7, size=3) +
+
+    geom_smooth(method='lm', color='#FF006E', fill='#FF006E', alpha=0.2) +
+
+    labs(
+        title='Relationship Between School Hygiene and Life Expectancy',
+        subtitle='Higher percentages of schools without hygiene services correlate with lower life expectancy',
+        x='Schools Without Hygiene Services (%)',
+        y='Life Expectancy (years)',
+        caption='Data source: Combined hygiene and health statistics'
+    ) +
+
+    theme_minimal() +
+    theme(
+        figure_size=(10, 8),
+        plot_title=element_text(face='bold', size=15),
+        plot_subtitle=element_text(size=12, color='#666666'),
+        axis_title=element_text(size=12),
+        axis_text=element_text(size=10),
+        panel_grid_major=element_blank(),
+        panel_grid_minor=element_blank(),
+        plot_caption=element_text(size=9, color='#999999')
+    ) +
+
+    scale_x_continuous(limits=[0, 100], breaks=range(0, 101, 20)) +
+    scale_y_continuous(limits=[30, 90], breaks=range(30, 91, 10))
+)
+
+display(scatter_plot)
+```
+
+# **Global Distribution of School Hygiene Gaps**
+
+This worldwide choropleth map depicts a compelling narrative about a fundamental necessity that far too many schools still do not have—hygiene. The color gradient, transitioning from pale yellow to dark red, uncovers a stark reality: in numerous areas, children attend school without having clean water, soap, or safe sanitation.
+
+Sub-Saharan Africa is particularly striking, as many nations are marked in dark red, signifying that more than **70%** of their schools lack fundamental hygiene facilities. South and Southeast Asia also exhibit concerning levels, with **40–60%** of schools lacking adequacy. Latin America, although relatively better positioned, still exhibits areas of concern, primarily within the **20–40%** range.
+
+The contrasts among regions are striking, emphasizing precisely where global focus—and funding—needs to be directed. Nations marked in the darkest red demand urgent measures, not merely via financial support, but through effective cooperation. Adjacent countries can collaborate, exchanging strategies and resources, while administrations coordinate their initiatives in education, health, and water sectors to create enduring infrastructure.
+
+To transform this map into a visual representation of progress, we need to take action—by deploying mobile hygiene units to the most neglected regions, educating trainers on sanitation and upkeep, and monitoring outcomes with consistent updates. Enhancing school hygiene goes beyond just water or soap; it involves dignity, safety, and ensuring that every child can learn in a healthy setting.
+
+```{python}
+#| colab: {base_uri: https://localhost:8080/, height: 563}
+import plotly.express as px
+
+fig = px.line(
+    cleaned_data,
+    x="year",
+    y="proportion_of_schools_with_no_hygiene_service",
+    color="country",
+    line_group="country",
+    hover_name="country",
+    title="Trends in Schools Without Hygiene Services (All Countries)",
+)
+
+# Add dropdown to filter by country
+fig.update_layout(
+    updatemenus=[
+        {
+            "buttons": [
+                {"label": "All Countries",
+                 "method": "update",
+                 "args": [{"visible": [True] * len(fig.data)},
+                          {"title": "All Countries"}]}
+            ] + [
+                {"label": country,
+                 "method": "update",
+                 "args": [{"visible": [trace.name == country for trace in fig.data]},
+                          {"title": f"Trend for {country}"}]}
+                for country in cleaned_data["country"].unique()
+            ],
+            "direction": "down",
+            "showactive": True,
+        }
+    ]
+)
+
+fig.add_annotation(
+    xref="paper", yref="paper",
+    x=0.5, y=-0.15,
+    text="Data source: UNESCO Institute for Statistics | Created with Plotly",
+    showarrow=False,
+    font=dict(size=10, color="#999999"),
+    align="center",
+)
+
+fig.show()
+```
+
+# **Hygiene Services Trends in Schools: A Global Comparison Through Time**
+
+This interactive dashboard showcases the Hygiene Services Trend in schools from various countries between **2016 and 2022**. Users can narrow their search by country to examine particular trends and assess global sanitation advancements.
+
+For instance, **Angola** displays a stagnant pattern, with around **13%** of schools continuously lacking hygiene services throughout the years. Conversely, **Bangladesh** shows steady progress, mirroring national initiatives to improve school sanitation facilities. At the same time, **Macao** upholds a consistently high standard of hygiene access, with very few schools missing essential services.
+
+These trends highlight an important worldwide disparity: while certain nations consistently move towards universal sanitation coverage, others face ongoing deficiencies. Utilizing data from UNICEF indicators and metadata, this visualization showcases achievements and critical areas requiring prompt action, providing essential insights for policymakers, NGOs, and education planners striving to create healthier learning spaces for children globally
+
