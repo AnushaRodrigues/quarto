@@ -1,0 +1,14 @@
+project:
+  type: website
+
+format:
+  html:
+    self-contained: true
+    embed-resources: true
+    code-fold: true
+    code-tools: true
+
+execute:
+  echo: true
+  output: true
+  embed-resources: true
